@@ -1,6 +1,5 @@
-
 # --------------------------------------------------------------
-# Step 0: Import packages and modules
+# Step 0: Import necessary libraries and modules
 # --------------------------------------------------------------
 import asyncio
 import os
@@ -11,149 +10,105 @@ from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import List
 
-
 # --------------------------------------------------------------
-# Step 1: Get OpenAI API key
+# Step 1: Load environment variables
 # --------------------------------------------------------------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --------------------------------------------------------------
-# Step 2: Define tools for agent
+# Step 2: Define the tool that generates social media posts
 # --------------------------------------------------------------
-
-# Tool: Generate social media content from transcript
 @function_tool
-def generate_content(video_transcript: str, social_media_platform: str):
-    print(f"Generating social media content for {social_media_platform}...")
+def create_social_post(transcript: str, platform: str):
+    print(f"Creating content for: {platform}")
 
-    # Initialize OpenAI client
     client = OpenAI(api_key=OPENAI_API_KEY)
-
-    # Generate content
 
     response = client.responses.create(
         model="gpt-4o",
         input=[
-            {"role": "user", "content": f"Here is a new video transcript:\n{video_transcript}\n\n"
-                                        f"Generate a social media post on my {social_media_platform} based on my provided video transcript.\n"}
+            {"role": "user", "content": f"Here is the transcript:\n{transcript}\n\n"
+                                         f"Please write a post for {platform} using the transcript above."}
         ],
-        max_output_tokens=2500  # Increase tokens for longer blog posts
+        max_output_tokens=2500
     )
 
     return response.output_text
 
-
 # --------------------------------------------------------------
-# Step 3: Define agent (content writer agent)
+# Step 3: Define the agent that manages content creation
 # --------------------------------------------------------------
-
 @dataclass
 class Post:
     platform: str
     content: str
 
-
-content_writer_agent = Agent(
-    name="Content Writer Agent",
-    instructions="""You are a talented content writer who writes engaging, humorous, informative and 
-                    highly readable social media posts. 
-                    You will be given a video transcript and social media platforms. 
-                    You will generate a social media post based on the video transcript 
-                    and the social media platforms.
-                    You may search the web for up-to-date information on the topic and 
-                    fill in some useful details if needed.""",
+content_creator = Agent(
+    name="Content Creator Agent",
+    instructions="""
+        You are a creative social media strategist.
+        Based on a given video transcript and platform, you generate catchy and relevant posts.
+        Utilize web search when necessary to enrich the content.
+    """,
     model="gpt-4o-mini",
-    tools=[generate_content,
-           WebSearchTool(),
-           ],
+    tools=[create_social_post, WebSearchTool()],
     output_type=List[Post],
 )
 
-
 # --------------------------------------------------------------
-# Step 4: Define helper functions
+# Step 4: Function to fetch YouTube video transcript
 # --------------------------------------------------------------
-
-# Fetch transcript from a youtube video using the video id
-def get_transcript(video_id: str, languages: list = None) -> str:
-    """
-    Retrieves the transcript for a YouTube video.
-
-    Args:
-        video_id (str): The YouTube video ID.
-        languages (list, optional): List of language codes to try, in order of preference.
-                                   Defaults to ["en"] if None.
-
-    Returns:
-        str: The concatenated transcript text.
-
-    Raises:
-        Exception: If transcript retrieval fails, with details about the failure.
-    """
-    if languages is None:
-        languages = ["en"]
+def fetch_transcript(video_id: str, preferred_langs: list = None) -> str:
+    if preferred_langs is None:
+        preferred_langs = ["en"]
 
     try:
-        # Use the Youtube transcript API
-        ytt_api = YouTubeTranscriptApi()
-        fetched_transcript = ytt_api.fetch(video_id, languages=languages)
-
-        # More efficient way to concatenate all text snippets
-        transcript_text = " ".join(snippet.text for snippet in fetched_transcript)
-
-        return transcript_text
+        transcript_data = YouTubeTranscriptApi().fetch(video_id, languages=preferred_langs)
+        return " ".join(snippet.text for snippet in transcript_data)
 
     except Exception as e:
-        # Handle specific YouTube transcript API exceptions
         from youtube_transcript_api._errors import (
-            CouldNotRetrieveTranscript, 
-            VideoUnavailable,
-            InvalidVideoId, 
-            NoTranscriptFound,
-            TranscriptsDisabled
+            CouldNotRetrieveTranscript, VideoUnavailable,
+            InvalidVideoId, NoTranscriptFound, TranscriptsDisabled
         )
 
         if isinstance(e, NoTranscriptFound):
-            error_msg = f"No transcript found for video {video_id} in languages: {languages}"
+            err = f"No transcript available for video {video_id} in languages: {preferred_langs}"
         elif isinstance(e, VideoUnavailable):
-            error_msg = f"Video {video_id} is unavailable"
+            err = f"The video {video_id} is not accessible."
         elif isinstance(e, InvalidVideoId):
-            error_msg = f"Invalid video ID: {video_id}"
+            err = f"The provided video ID '{video_id}' is invalid."
         elif isinstance(e, TranscriptsDisabled):
-            error_msg = f"Transcripts are disabled for video {video_id}"
+            err = f"Transcripts are disabled for video {video_id}."
         elif isinstance(e, CouldNotRetrieveTranscript):
-            error_msg = f"Could not retrieve transcript: {str(e)}"
+            err = f"Unable to get transcript: {str(e)}"
         else:
-            error_msg = f"An unexpected error occurred: {str(e)}"
+            err = f"Unknown error: {str(e)}"
 
-        print(f"Error: {error_msg}")
-        raise Exception(error_msg) from e
-
-
+        print("Transcript Error:", err)
+        raise Exception(err) from e
 
 # --------------------------------------------------------------
-# Step 5: Run the agent
+# Step 5: Async function to execute the workflow
 # --------------------------------------------------------------
 async def main():
     video_id = "OZ5OZZZ2cvk"
-    transcript = get_transcript(video_id)
+    transcript = fetch_transcript(video_id)
 
-    msg = f"Generate a LinkedIn post and an Instagram caption based on this video transcript: {transcript}"
+    message = f"Create LinkedIn and Instagram posts from this transcript: {transcript}"
+    
+    task_input = [{"content": message, "role": "user"}]
 
-    # Package input for the agent
-    input_items = [{"content": msg, "role": "user"}]
-
-    # Run content writer agent
-    # Add trace to see the agent's execution steps
-    # You can check the trace on https://platform.openai.com/traces
-    with trace("Writing content"):
-        result = await Runner.run(content_writer_agent, input_items)
-        output = ItemHelpers.text_message_outputs(result.new_items)
-        print("Generated Post:\n", output)
+    with trace("Generating social media content"):
+        result = await Runner.run(content_creator, task_input)
+        final_output = ItemHelpers.text_message_outputs(result.new_items)
+        print("Final Generated Output:\n", final_output)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
 
 
 
